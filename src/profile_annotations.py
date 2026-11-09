@@ -1,4 +1,9 @@
+import re
+import sys
+from collections import Counter
+from functools import lru_cache
 from pathlib import Path
+
 import pandas as pd
 
 # ==================== 1. 路径配置 ====================
@@ -84,7 +89,7 @@ def inspect_brackets(text: str) -> dict:
 # ==================== 4. 标注覆盖率分析 ====================
 
 def annotation_coverage(df: pd.DataFrame) -> None:
-    """统计显式标注的覆盖情况及括号结构异常。"""
+    """统计标注括号的覆盖情况及结构异常。"""
 
     print("\n========== 1. 偏误标注覆盖情况 ==========")
 
@@ -102,10 +107,10 @@ def annotation_coverage(df: pd.DataFrame) -> None:
     # 汇总各项统计
     metrics = {
         "总记录数": total,
-        "含完整括号结构的记录数": int(
+        "含至少一对匹配括号的记录数": int(
             results["has_annotation"].sum()
         ),
-        "无完整括号结构的记录数": int(
+        "未检测到匹配括号的记录数": int(
             (~results["has_annotation"]).sum()
         ),
         "含花括号标注的记录数": int(
@@ -225,11 +230,117 @@ def analyze_cp_mismatch(df: pd.DataFrame) -> None:
     print(f"不包含 CP 边界标记：{neither:,}")
 
 
+# ==================== 6. 偏误编码提取 ====================
 
-# ==================== 6. 主程序入口 ====================
+# 加载官方编码表校验模块
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+from validate_hsk_annotation_codes import validate, RULES, confirmed_codes
 
 
-# ==================== 6. 主程序入口 ====================
+@lru_cache(maxsize=1)
+def load_code_rules():
+    rows, errors = validate(PROJECT_ROOT / "config/hsk_annotation_codes.csv")
+    if errors:
+        raise ValueError("编码表校验失败：" + "; ".join(errors))
+    confirmed = confirmed_codes(rows)
+    fixed = {r["code"] for r in confirmed if r["code_type"] == "固定编码"}
+    pending = {r["code"] for r in rows if r["validation_status"] == "pending"}
+    patterns = [re.compile(RULES[r["code"]]) for r in confirmed
+                if r["code_type"] == "参数化编码"]
+    return fixed, pending, patterns
+
+
+def parse_annotation_codes(text):
+    """
+    从标注文本中提取已确认的偏误编码。
+
+    根据官方编码表识别固定编码和参数化编码，
+    对无法可靠判断的候选单独记录，不纳入正式统计。
+
+    Returns:
+        codes: 已识别的编码列表，保留重复出现。
+        review: 需要进一步核验的候选及其原因。
+    """
+    if pd.isna(text):
+        return [], []
+    text = str(text)
+    fixed, pending, patterns = load_code_rules()
+    codes, review = [], []
+    # 栈仅用于定位局部结构问题，不让外层CP缺口吞掉内部编码。
+    stack, closed = [], set()
+    for pos, char in enumerate(text):
+        if char in "[{":
+            stack.append((pos, char))
+        elif char in "]}" and stack and stack[-1][1] == {']': '[', '}': '{'}[char]:
+            closed.add(stack.pop()[0])
+    for match in re.finditer(r"[\[{]", text):
+        pos = match.start()
+        tail = text[pos+1:]
+        raw = re.split(r"[\[\]{}]", tail, maxsplit=1)[0].strip()
+        candidates = [c for c in fixed | pending if raw.startswith(c)]
+        candidates += [m.group() for pat in patterns if (m := pat.match(raw))]
+        code = max(candidates, key=len) if candidates else None
+        reason = None
+        if not code:
+            reason = "unknown_code"
+        else:
+            rest = raw[len(code):]
+            # 拼音、外文词容许字母内容；其他编码紧连ASCII字符无法可靠分界。
+            if re.fullmatch(r"CC[0-9]{2,}", code):
+                # 多位连续数字可能包含原文数字内容，无法确定参数终点。
+                # 不将其判为非法，也不根据数值大小截断或猜测参数。
+                reason = "ambiguous_numeric_boundary"
+            elif rest and re.match(r"[A-Za-z0-9+?#？-]", rest) and not (
+                code in {"P", "BC", "BQ", "BD"} or re.fullmatch(r"W[0-9]+", code)
+            ):
+                reason = "ambiguous_code_boundary"
+            elif code in pending:
+                reason = "pending_code"
+            elif pos not in closed and code != "CP":
+                reason = "incomplete_or_mismatched_bracket"
+            elif code == "P" and text[pos] != "[":
+                reason = "ambiguous_code_boundary"
+            else:
+                codes.append(code)
+        if reason:
+            review.append({"raw_candidate": text[pos] + raw, "reason": reason})
+    return codes, review
+
+
+
+# ==================== 7. 偏误编码频次统计 ====================
+
+def annotation_code_frequency(df: pd.DataFrame) -> None:
+    """
+    统计已确认偏误编码的出现次数及涉及记录数。
+
+    输出：
+        annotation_code_frequency_validated.csv：编码频次统计。
+        annotation_code_review.csv：无法确认的编码候选，仅供本地核验。
+    """
+    occurrence_counter, record_counter = Counter(), Counter()
+    reviews = []
+    for record_id, text in df[["record_id", "检索原句"]].itertuples(index=False, name=None):
+        codes, candidates = parse_annotation_codes(text)
+        occurrence_counter.update(codes)
+        record_counter.update(set(codes))
+        for item in candidates:
+            reviews.append(dict(record_id=record_id, **item, source_text=text))
+    summary = pd.DataFrame([
+        dict(error_code=c, occurrence_count=n, record_count=record_counter[c])
+        for c, n in occurrence_counter.items()
+    ], columns=["error_code", "occurrence_count", "record_count"])
+    summary = summary.sort_values(["occurrence_count", "error_code"], ascending=[False, True])
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(REPORT_DIR / "annotation_code_frequency_validated.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(reviews, columns=["record_id", "raw_candidate", "reason", "source_text"]).to_csv(
+        REPORT_DIR / "annotation_code_review.csv", index=False, encoding="utf-8-sig")
+    print(f"已确认编码种类：{len(summary)}；总出现次数：{sum(occurrence_counter.values())}")
+    print(f"核验候选：{dict(Counter(r['reason'] for r in reviews))}")
+    print(summary.head(15).to_string(index=False))
+
+
+# ==================== 8. 主程序入口 ====================
 
 def main():
     # ---------- 1. 创建报告目录 ----------
@@ -238,12 +349,15 @@ def main():
     # ---------- 2. 读取 HSK 合并数据 ----------
     df = load_data(DATA_PATH)
 
-    # ---------- 3. 阶段 1：标注覆盖情况 ----------
+    # ---------- 3. 标注结构画像 ----------
     annotation_coverage(df)
-
-    # ---------- 4. 篇章标注边界分析 ----------
     analyze_cp_mismatch(df)
+
+    # ---------- 4. 偏误编码画像 ----------
+    annotation_code_frequency(df)
 
 
 if __name__ == "__main__":
     main()
+
+# AI辅助生成：GPT-6, 2026-11-8

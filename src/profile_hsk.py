@@ -408,3 +408,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# AI辅助生成：GPT-6, 2026-11-9
