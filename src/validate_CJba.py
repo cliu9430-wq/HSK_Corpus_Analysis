@@ -12,7 +12,7 @@ from PIL import Image, UnidentifiedImageError
 # ==================== 1. 路径配置 ====================
 
 # 当前脚本位于 src/validate/
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 RAW_DIR = PROJECT_ROOT / "data/raw"
 TEXT_DIR = RAW_DIR / "compositions_CJba"

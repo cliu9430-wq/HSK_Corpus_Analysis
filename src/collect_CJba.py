@@ -14,7 +14,7 @@ from urllib3.util.retry import Retry
 
 # ==================== 1. 基础配置 ====================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 CSV_PATH = PROJECT_ROOT / "data/raw/errors_CJba.csv"
 TEXT_DIR = PROJECT_ROOT / "data/raw/compositions_CJba"

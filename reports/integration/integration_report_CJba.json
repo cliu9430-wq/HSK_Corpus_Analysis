@@ -1,0 +1,16 @@
+{
+  "integration_time": "2026-11-17T18:56:34",
+  "error_records": 570,
+  "unique_compositions": 529,
+  "scan_pages_total": 869,
+  "error_frequency": {
+    "1": 492,
+    "2": 33,
+    "3": 4
+  },
+  "output_files": [
+    "data/processed/errors_integrated_CJba.csv",
+    "data/processed/compositions_integrated_CJba.csv"
+  ],
+  "integration_passed": true
+}
