@@ -1,0 +1,31 @@
+{
+  "validation_time": "2026-11-17T18:36:17",
+  "errors": {
+    "error_records": 570,
+    "unique_compositions": 529,
+    "id_frequency": {
+      "1": 492,
+      "2": 33,
+      "3": 4
+    }
+  },
+  "texts": {
+    "expected": 529,
+    "valid": 529,
+    "extra": 0,
+    "min_length": 337,
+    "max_length": 1547
+  },
+  "scans": {
+    "valid_compositions": 529,
+    "expected_pages": 869,
+    "valid_pages": 869,
+    "extra_gifs": 0
+  },
+  "collection_status": {
+    "status_records": 529,
+    "marked_complete": 529
+  },
+  "issue_count": 0,
+  "validation_passed": true
+}
